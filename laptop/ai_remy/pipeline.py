@@ -16,6 +16,8 @@ from ai_remy.reasoning.filter import should_speak
 def process_frame(
     image_input: Union[bytes, np.ndarray],
     memory: RecentMemory,
+    user_prompt: str = "",
+    conversation_context: str = "",
 ) -> Tuple[List[str], str, bool]:
     """
     Run preprocess -> Gemini (scene + actions + comment) -> events -> filter.
@@ -32,6 +34,8 @@ def process_frame(
         recipe=memory.get_recipe(),
         recipe_steps=memory.get_recipe_steps(),
         recent_events_summary=memory.get_recent_events_summary(),
+        user_prompt=user_prompt,
+        conversation_context=conversation_context,
     )
     events = extract_events(actions_text)
     memory.add_events(events)
@@ -47,6 +51,8 @@ def process_frame_streaming(
     image_input: Union[bytes, np.ndarray],
     memory: RecentMemory,
     on_comment_chunk: Callable[[str], None] | None = None,
+    user_prompt: str = "",
+    conversation_context: str = "",
 ) -> Tuple[List[str], str, bool]:
     """
     Streaming variant: emits commentary chunks during generation.
@@ -61,6 +67,8 @@ def process_frame_streaming(
         recipe_steps=memory.get_recipe_steps(),
         recent_events_summary=memory.get_recent_events_summary(),
         on_comment_chunk=on_comment_chunk,
+        user_prompt=user_prompt,
+        conversation_context=conversation_context,
     )
     events = extract_events(actions_text)
     memory.add_events(events)

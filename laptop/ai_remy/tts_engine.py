@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
+import time
 from typing import Any, Iterable
 
 import numpy as np
@@ -115,6 +116,8 @@ class KokoroTTSEngine:
 
         self._queue: Queue[str] = Queue()
         self._stop_event = Event()
+        self._is_speaking = Event()
+        self._hold_playback = Event()
         self._worker_thread = Thread(target=self._worker_loop, daemon=True)
         self._worker_thread.start()
 
@@ -124,6 +127,13 @@ class KokoroTTSEngine:
                 text = self._queue.get(timeout=0.2)
             except Empty:
                 continue
+
+            while self._hold_playback.is_set() and not self._stop_event.is_set():
+                time.sleep(0.02)
+
+            if self._stop_event.is_set():
+                self._queue.task_done()
+                break
 
             try:
                 self.speak(text)
@@ -138,9 +148,13 @@ class KokoroTTSEngine:
         if not text:
             return
 
-        chunks = iter_audio_chunks(self.pipeline, text, self.cfg.voice)
-        audio = play_audio_chunks(chunks, self.cfg.sample_rate)
-        save_audio_for_streaming_stub(audio, self.cfg.sample_rate, enabled=False)
+        self._is_speaking.set()
+        try:
+            chunks = iter_audio_chunks(self.pipeline, text, self.cfg.voice)
+            audio = play_audio_chunks(chunks, self.cfg.sample_rate)
+            save_audio_for_streaming_stub(audio, self.cfg.sample_rate, enabled=False)
+        finally:
+            self._is_speaking.clear()
 
     def enqueue(self, text_chunk: str) -> None:
         """Queue text chunk for background playback."""
@@ -148,7 +162,25 @@ class KokoroTTSEngine:
         if text:
             self._queue.put(text)
 
+    def hold_after_current_sentence(self) -> None:
+        """Pause queued playback after the sentence currently being spoken finishes."""
+        self._hold_playback.set()
+
+    def resume_playback(self) -> None:
+        """Resume playback of queued TTS chunks."""
+        self._hold_playback.clear()
+
+    def wait_until_current_sentence_done(self, timeout: float | None = None) -> bool:
+        """Wait until the currently speaking sentence completes."""
+        start = time.monotonic()
+        while self._is_speaking.is_set():
+            if timeout is not None and (time.monotonic() - start) >= timeout:
+                return False
+            time.sleep(0.02)
+        return True
+
     def close(self) -> None:
         """Stop worker thread."""
         self._stop_event.set()
+        self._hold_playback.clear()
         self._worker_thread.join(timeout=2.0)

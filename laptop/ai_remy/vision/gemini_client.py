@@ -50,6 +50,16 @@ RECIPE_GENERATION_PROMPT = """You are a friendly cooking mentor. The user said t
 Generate a concise step-by-step recipe for that dish. Use clear, short steps (one or two sentences each). Number the steps. Do not include a long intro—just the steps the cook will follow. Output only the recipe steps, no other text."""
 
 
+DISH_SUMMARY_PROMPT = """You are helping normalize a cooking session title.
+User originally said: "{user_input}"
+
+Recipe steps generated:
+{recipe_steps}
+
+Return exactly one short line (max 12 words) summarizing what dish this is.
+Do not include quotes, markdown, numbering, or extra explanation."""
+
+
 def generate_recipe_for_dish(dish: str) -> str:
     """Generate a step-by-step recipe for the given dish (text-only Gemini call). Returns recipe text or empty on failure."""
     if not (dish or "").strip():
@@ -60,6 +70,24 @@ def generate_recipe_for_dish(dish: str) -> str:
     if not response or not response.text:
         return ""
     return response.text.strip()
+
+
+def summarize_dish_from_recipe(user_input: str, recipe_steps: str) -> str:
+    """Return a concise dish summary inferred from the generated recipe."""
+    cleaned_input = (user_input or "").strip()
+    cleaned_steps = (recipe_steps or "").strip()
+    if not cleaned_input and not cleaned_steps:
+        return ""
+
+    prompt = DISH_SUMMARY_PROMPT.format(
+        user_input=cleaned_input or "(none)",
+        recipe_steps=cleaned_steps or "(none)",
+    )
+    model = genai.GenerativeModel(config.GEMINI_MODEL)
+    response = model.generate_content(prompt)
+    if response and response.text:
+        return response.text.strip()
+    return cleaned_input
 
 
 def _split_complete_sentences(buffer: str) -> tuple[list[str], str]:
@@ -108,6 +136,8 @@ def analyze_scene(
     recipe: str = "",
     recipe_steps: str = "",
     recent_events_summary: str = "",
+    user_prompt: str = "",
+    conversation_context: str = "",
 ) -> Tuple[str, str, str]:
     """
     Single Gemini call: scene + actions + one mentor comment.
@@ -124,6 +154,10 @@ def analyze_scene(
         prefix_parts.append("Recent actions you've seen: " + recent_events_summary + ".")
     if recent_context:
         prefix_parts.append("What you (Remy) already said recently: " + recent_context + ".")
+    if conversation_context:
+        prefix_parts.append("Recent user/remy conversation turns:\n" + conversation_context)
+    if user_prompt:
+        prefix_parts.append("The user just said (voice): " + user_prompt)
     if prefix_parts:
         prompt = "\n".join(prefix_parts) + "\n\n" + prompt
 
@@ -143,6 +177,8 @@ def analyze_scene_stream(
     recipe_steps: str = "",
     recent_events_summary: str = "",
     on_comment_chunk: Callable[[str], None] | None = None,
+    user_prompt: str = "",
+    conversation_context: str = "",
 ) -> Tuple[str, str, str]:
     """Streaming Gemini call that emits commentary sentence chunks as they complete."""
     prompt = SCENE_PROMPT
@@ -155,6 +191,10 @@ def analyze_scene_stream(
         prefix_parts.append("Recent actions you've seen: " + recent_events_summary + ".")
     if recent_context:
         prefix_parts.append("What you (Remy) already said recently: " + recent_context + ".")
+    if conversation_context:
+        prefix_parts.append("Recent user/remy conversation turns:\n" + conversation_context)
+    if user_prompt:
+        prefix_parts.append("The user just said (voice): " + user_prompt)
     if prefix_parts:
         prompt = "\n".join(prefix_parts) + "\n\n" + prompt
 
