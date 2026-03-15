@@ -10,7 +10,7 @@ Usage:
   cd cooking-vision && python app.py
 
   # Terminal 2: run Remy (watches that file and calls Gemini when it changes)
-  cd laptop && .\venv\Scripts\Activate.ps1 && python run_remy.py
+    cd laptop && .\\venv\\Scripts\\Activate.ps1 && python run_remy.py
 
   # Or set FRAME_PATH in .env to point at your frame file.
 """
@@ -26,14 +26,15 @@ if str(_laptop_dir) not in sys.path:
     sys.path.insert(0, str(_laptop_dir))
 
 from ai_remy import config
-from ai_remy.pipeline import process_frame
+from ai_remy.pipeline import process_frame_streaming
 from ai_remy.state.memory import RecentMemory
+from ai_remy.tts_engine import KokoroTTSEngine
 
 
 POLL_INTERVAL_S = 1.0  # check file mtime every second
 
 
-def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S) -> None:
+def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S, speak: bool = True) -> None:
     path = Path(frame_path)
     if not path.parent.exists():
         print(f"[remy] Frame directory does not exist: {path.parent}")
@@ -45,6 +46,7 @@ def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S) -> None:
         sys.exit(1)
 
     memory = RecentMemory(max_events=10, max_commentaries=5)
+    tts = KokoroTTSEngine() if speak else None
     last_mtime: float | None = None
     print(f"[remy] Watching: {path.resolve()}")
     print("[remy] Each time cooking-vision saves a new frame, Gemini will analyze it.")
@@ -73,8 +75,16 @@ def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S) -> None:
                 time.sleep(poll_interval)
                 continue
 
+            def on_chunk(chunk: str) -> None:
+                if tts:
+                    tts.enqueue(chunk)
+
             try:
-                events, commentary, should_speak = process_frame(image_bytes, memory)
+                events, commentary, should_speak = process_frame_streaming(
+                    image_bytes,
+                    memory,
+                    on_comment_chunk=on_chunk,
+                )
             except Exception as e:
                 print(f"[remy] Pipeline error: {e}")
                 time.sleep(poll_interval)
@@ -89,6 +99,9 @@ def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S) -> None:
             time.sleep(poll_interval)
     except KeyboardInterrupt:
         print("\n[remy] Done.")
+    finally:
+        if tts:
+            tts.close()
 
 
 if __name__ == "__main__":
@@ -104,5 +117,10 @@ if __name__ == "__main__":
         default=POLL_INTERVAL_S,
         help="Seconds between file checks",
     )
+    parser.add_argument(
+        "--no-speak",
+        action="store_true",
+        help="Disable local speaker playback",
+    )
     args = parser.parse_args()
-    run(frame_path=args.frame_path, poll_interval=args.poll)
+    run(frame_path=args.frame_path, poll_interval=args.poll, speak=not args.no_speak)
