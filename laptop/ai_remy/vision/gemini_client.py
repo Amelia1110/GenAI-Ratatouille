@@ -1,5 +1,6 @@
 """
-Gemini 1.5 Flash: single call for scene description, actions, and one Remy-style comment.
+Gemini: single call for scene description, actions, and one Remy-style comment.
+Uses GEMINI_MODEL from config (default gemini-2.5-flash). Run list_models.py to see available names.
 """
 import re
 from typing import List, Tuple
@@ -11,8 +12,6 @@ from ai_remy import config
 # Configure once
 if config.GEMINI_API_KEY:
     genai.configure(api_key=config.GEMINI_API_KEY)
-
-MODEL_NAME = "gemini-1.5-flash"
 
 SCENE_PROMPT = """You are analyzing a live kitchen camera frame from a cooking session.
 
@@ -53,7 +52,7 @@ def analyze_scene(
     if recent_context:
         prompt = "Recent context (what you already said): " + recent_context + "\n\n" + prompt
 
-    model = genai.GenerativeModel(MODEL_NAME)
+    model = genai.GenerativeModel(config.GEMINI_MODEL)
     part = _image_part(image_bytes)
     response = model.generate_content([prompt, part])
     if not response or not response.text:
