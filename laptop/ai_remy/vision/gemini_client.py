@@ -13,9 +13,10 @@ from ai_remy import config
 if config.GEMINI_API_KEY:
     genai.configure(api_key=config.GEMINI_API_KEY)
 
-SCENE_PROMPT = """You are analyzing a live kitchen camera frame from a cooking session.
+# Base instruction for mentor mode: guide the user through their recipe and comment on their actions.
+SCENE_PROMPT = """You are Remy, a warm and knowledgeable cooking mentor. You are watching the cook via a live kitchen camera. Your job is to guide them through the recipe they are making, comment on what they are doing, and gently steer them (e.g. suggest the next step, warn if something is off, or praise good technique).
 
-Describe in 1-2 sentences what is happening in the scene (ingredients, tools, actions).
+First describe in 1-2 sentences what you see in the scene (ingredients, tools, actions).
 Then list cooking-related actions you see, one per line, from this set (use only these when they apply):
 - chopping onion / chopping vegetables / cutting
 - stirring pan / stirring
@@ -25,7 +26,11 @@ Then list cooking-related actions you see, one per line, from this set (use only
 - flipping or turning food
 - no significant cooking action
 
-Then give exactly ONE short spoken comment (max 15 words) as Remy, a friendly cooking mentor: encouraging, observant, occasionally playful. Do not use markdown or quotes.
+Then give exactly ONE short spoken line (max 20 words) as Remy. The line should:
+- Comment on what they are doing (e.g. "Nice, the onions are in. Next, get the pan hot for the garlic.")
+- If you know their recipe: guide them toward the next step or praise when they are on track.
+- Be encouraging, observant, and occasionally playful. Never condescending.
+Do not use markdown or quotes.
 
 Format your response exactly as:
 SCENE: <your 1-2 sentence description>
@@ -38,6 +43,23 @@ COMMENT: <one short line to be spoken>
 
 def _image_part(jpeg_bytes: bytes):
     return {"inline_data": {"mime_type": "image/jpeg", "data": jpeg_bytes}}
+
+
+RECIPE_GENERATION_PROMPT = """You are a friendly cooking mentor. The user said they want to make: "{dish}".
+
+Generate a concise step-by-step recipe for that dish. Use clear, short steps (one or two sentences each). Number the steps. Do not include a long intro—just the steps the cook will follow. Output only the recipe steps, no other text."""
+
+
+def generate_recipe_for_dish(dish: str) -> str:
+    """Generate a step-by-step recipe for the given dish (text-only Gemini call). Returns recipe text or empty on failure."""
+    if not (dish or "").strip():
+        return ""
+    prompt = RECIPE_GENERATION_PROMPT.format(dish=dish.strip())
+    model = genai.GenerativeModel(config.GEMINI_MODEL)
+    response = model.generate_content(prompt)
+    if not response or not response.text:
+        return ""
+    return response.text.strip()
 
 
 def _split_complete_sentences(buffer: str) -> tuple[list[str], str]:
@@ -83,14 +105,27 @@ def _parse_response_text(text: str) -> Tuple[str, str, str]:
 def analyze_scene(
     image_bytes: bytes,
     recent_context: str = "",
+    recipe: str = "",
+    recipe_steps: str = "",
+    recent_events_summary: str = "",
 ) -> Tuple[str, str, str]:
     """
-    Single Gemini call: scene + actions + one comment.
+    Single Gemini call: scene + actions + one mentor comment.
+    recipe: dish name. recipe_steps: full AI-generated recipe for step-by-step guidance.
     Returns: (scene_text, actions_text, commentary)
     """
     prompt = SCENE_PROMPT
+    prefix_parts = []
+    if recipe:
+        prefix_parts.append("The cook is making: " + recipe + ".")
+    if recipe_steps:
+        prefix_parts.append("Recipe to guide them through:\n" + recipe_steps)
+    if recent_events_summary:
+        prefix_parts.append("Recent actions you've seen: " + recent_events_summary + ".")
     if recent_context:
-        prompt = "Recent context (what you already said): " + recent_context + "\n\n" + prompt
+        prefix_parts.append("What you (Remy) already said recently: " + recent_context + ".")
+    if prefix_parts:
+        prompt = "\n".join(prefix_parts) + "\n\n" + prompt
 
     model = genai.GenerativeModel(config.GEMINI_MODEL)
     part = _image_part(image_bytes)
@@ -104,12 +139,24 @@ def analyze_scene(
 def analyze_scene_stream(
     image_bytes: bytes,
     recent_context: str = "",
+    recipe: str = "",
+    recipe_steps: str = "",
+    recent_events_summary: str = "",
     on_comment_chunk: Callable[[str], None] | None = None,
 ) -> Tuple[str, str, str]:
     """Streaming Gemini call that emits commentary sentence chunks as they complete."""
     prompt = SCENE_PROMPT
+    prefix_parts = []
+    if recipe:
+        prefix_parts.append("The cook is making: " + recipe + ".")
+    if recipe_steps:
+        prefix_parts.append("Recipe to guide them through:\n" + recipe_steps)
+    if recent_events_summary:
+        prefix_parts.append("Recent actions you've seen: " + recent_events_summary + ".")
     if recent_context:
-        prompt = "Recent context (what you already said): " + recent_context + "\n\n" + prompt
+        prefix_parts.append("What you (Remy) already said recently: " + recent_context + ".")
+    if prefix_parts:
+        prompt = "\n".join(prefix_parts) + "\n\n" + prompt
 
     model = genai.GenerativeModel(config.GEMINI_MODEL)
     part = _image_part(image_bytes)

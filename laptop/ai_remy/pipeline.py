@@ -29,6 +29,9 @@ def process_frame(
     scene_text, actions_text, commentary = analyze_scene(
         image_bytes,
         recent_context=memory.get_context(),
+        recipe=memory.get_recipe(),
+        recipe_steps=memory.get_recipe_steps(),
+        recent_events_summary=memory.get_recent_events_summary(),
     )
     events = extract_events(actions_text)
     memory.add_events(events)
@@ -54,6 +57,9 @@ def process_frame_streaming(
     scene_text, actions_text, commentary = analyze_scene_stream(
         image_bytes,
         recent_context=memory.get_context(),
+        recipe=memory.get_recipe(),
+        recipe_steps=memory.get_recipe_steps(),
+        recent_events_summary=memory.get_recent_events_summary(),
         on_comment_chunk=on_comment_chunk,
     )
     events = extract_events(actions_text)

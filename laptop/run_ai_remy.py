@@ -65,6 +65,11 @@ def main() -> None:
         default=25.0,
         help="Scene-change threshold for cooking-vision",
     )
+    parser.add_argument(
+        "--recipe",
+        default="",
+        help="Pre-set dish (e.g. 'Pasta'). If omitted, Remy will ask out loud and listen for your answer.",
+    )
     args = parser.parse_args()
 
     if not app_py.exists():
@@ -104,7 +109,11 @@ def main() -> None:
 
     print("[ai_remy] Starting Gemini watcher...")
     try:
-        run_watcher(frame_path=args.frame_path, poll_interval=args.poll)
+        run_watcher(
+            frame_path=args.frame_path,
+            poll_interval=args.poll,
+            recipe=args.recipe,
+        )
     except KeyboardInterrupt:
         print("\n[ai_remy] Shutting down...")
     finally:

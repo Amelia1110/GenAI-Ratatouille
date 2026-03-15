@@ -31,6 +31,18 @@ Each time a new frame is saved, Remy analyzes it and prints events and commentar
 
 **Override frame path:** `python run_ai_remy.py --frame-path path/to/frames/latest.jpg` or set `FRAME_PATH` in `.env`.
 
+### Vocal session (no typing)
+
+Everything is voice-based. When you run the app:
+
+1. **Remy asks out loud:** “What dish are we making today?”
+2. **You answer via mic:** e.g. “Pasta”, “Scrambled eggs”.
+3. **Remy generates a recipe** for that dish and saves it in memory for the session.
+4. **Remy says:** “Got it. I’ve got a recipe for [dish]. Let’s get started. I’ll watch and guide you as you cook.”
+5. **While you cook**, Remy watches the camera and guides you through the recipe with spoken comments and next-step suggestions.
+
+You don’t type anything. Mic input uses `SpeechRecognition` (e.g. `pip install SpeechRecognition pyaudio`). To pre-set the dish without voice (e.g. for testing), set `RECIPE=Pasta` in `.env` or run with `--recipe "Pasta"`.
+
 ## Programmatic use
 
 ```python
@@ -38,12 +50,13 @@ from ai_remy.pipeline import process_frame
 from ai_remy.state.memory import RecentMemory
 
 memory = RecentMemory(max_events=10, max_commentaries=5)
+memory.set_recipe("pasta carbonara")  # optional: for mentor-style guidance
 image_bytes = Path("cooking-vision/frames/latest.jpg").read_bytes()
 events, commentary, should_speak = process_frame(image_bytes, memory)
 if should_speak:
     print(commentary)  # or send to TTS
 ```
-p
+
 ## Design
 
 See [../docs/AI_REMY_DESIGN.md](../docs/AI_REMY_DESIGN.md) and [../docs/PROMPTS_EXAMPLES.md](../docs/PROMPTS_EXAMPLES.md).

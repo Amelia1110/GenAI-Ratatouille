@@ -27,14 +27,48 @@ if str(_laptop_dir) not in sys.path:
 
 from ai_remy import config
 from ai_remy.pipeline import process_frame_streaming
+from ai_remy.recipe_input import PROMPT_DISH, get_dish_from_mic
 from ai_remy.state.memory import RecentMemory
 from ai_remy.tts_engine import KokoroTTSEngine
+from ai_remy.vision.gemini_client import generate_recipe_for_dish
 
 
 POLL_INTERVAL_S = 1.0  # check file mtime every second
 
 
-def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S, speak: bool = True) -> None:
+def _vocal_startup(tts: KokoroTTSEngine | None, memory: RecentMemory, recipe_arg: str) -> None:
+    """Fully vocal: Remy asks for the dish (TTS), user answers (mic), AI generates recipe and saves to memory."""
+    dish = (recipe_arg or "").strip() or config.RECIPE
+    if not dish:
+        if tts:
+            tts.speak(PROMPT_DISH)
+        dish = get_dish_from_mic()
+        if not dish:
+            if tts:
+                tts.speak("I didn't catch that. What dish are we making today?")
+            dish = get_dish_from_mic()
+        if not dish and tts:
+            tts.speak("No problem. I'll still watch and comment on what you're doing.")
+
+    if dish:
+        if tts:
+            tts.speak("One moment while I put together a recipe.")
+        steps = generate_recipe_for_dish(dish)
+        memory.set_recipe(dish)
+        memory.set_recipe_steps(steps)
+        if tts:
+            tts.speak(f"Got it. I've got a recipe for {dish}. Let's get started. I'll watch and guide you as you cook.")
+        print(f"[remy] Guiding you through: {dish}")
+    else:
+        print("[remy] No recipe set; Remy will comment on what you do.")
+
+
+def run(
+    frame_path: str,
+    poll_interval: float = POLL_INTERVAL_S,
+    speak: bool = True,
+    recipe: str = "",
+) -> None:
     path = Path(frame_path)
     if not path.parent.exists():
         print(f"[remy] Frame directory does not exist: {path.parent}")
@@ -47,9 +81,11 @@ def run(frame_path: str, poll_interval: float = POLL_INTERVAL_S, speak: bool = T
 
     memory = RecentMemory(max_events=10, max_commentaries=5)
     tts = KokoroTTSEngine() if speak else None
+    # Vocal startup: Remy asks "What dish are we making today?", user says e.g. "Pasta", AI generates recipe
+    _vocal_startup(tts, memory, recipe)
+
     last_mtime: float | None = None
     print(f"[remy] Watching: {path.resolve()}")
-    print("[remy] Each time cooking-vision saves a new frame, Gemini will analyze it.")
     print("[remy] Press Ctrl+C to quit.\n")
 
     try:
@@ -122,5 +158,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable local speaker playback",
     )
+    parser.add_argument(
+        "--recipe",
+        default="",
+        help="Pre-set dish (e.g. 'Pasta'). If omitted, Remy will ask out loud and listen for your answer.",
+    )
     args = parser.parse_args()
-    run(frame_path=args.frame_path, poll_interval=args.poll, speak=not args.no_speak)
+    run(
+        frame_path=args.frame_path,
+        poll_interval=args.poll,
+        speak=not args.no_speak,
+        recipe=args.recipe,
+    )
