@@ -1,0 +1,36 @@
+%% AI Remy - System Architecture (Mermaid)
+%% Render in VS Code (Mermaid extension) or at mermaid.live
+
+flowchart TB
+    subgraph Hardware["Hardware"]
+        CAM[ESP32-CAM]
+        LAPTOP[Laptop]
+        SPEAKERS[Laptop Speakers]
+    end
+
+    subgraph WiFi["WiFi"]
+        STREAM[MJPEG Video Stream]
+    end
+
+    subgraph PythonApp["Python Application"]
+        direction TB
+        CAPTURE[OpenCV Capture]
+        SAMPLER[Frame Sampler]
+        PREPROCESS[Resize/Compress]
+        GEMINI[Gemini 1.5 Flash]
+        AGENT[Commentary Agent]
+        FILTER[Commentary Filter]
+        TTS[TTS Piper/Coqui]
+        PLAY[Audio Playback]
+    end
+
+    CAM -->|MJPEG HTTP| STREAM
+    STREAM --> CAPTURE
+    CAPTURE --> SAMPLER
+    SAMPLER --> PREPROCESS
+    PREPROCESS --> GEMINI
+    GEMINI --> AGENT
+    AGENT --> FILTER
+    FILTER --> TTS
+    TTS --> PLAY
+    PLAY --> SPEAKERS
