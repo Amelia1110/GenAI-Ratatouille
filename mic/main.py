@@ -16,6 +16,8 @@ UDP_PORT = 5005
 BUFFER_SIZE = 1024
 PTT_START_MESSAGE = "PTT_START"
 PTT_STOP_MESSAGE = "PTT_STOP"
+START_MESSAGES = {PTT_START_MESSAGE, "START", "LISTEN", "PTT_DOWN", "PRESS"}
+STOP_MESSAGES = {PTT_STOP_MESSAGE, "STOP", "PTT_UP", "RELEASE"}
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
@@ -89,6 +91,7 @@ def start_recording(pa: pyaudio.PyAudio, cfg: AudioConfig, state: AudioCaptureSt
     """Begin recording if not already recording."""
     with state.lock:
         if state.is_recording:
+            print("PTT start ignored: already recording.")
             return
 
         try:
@@ -107,36 +110,43 @@ def start_recording(pa: pyaudio.PyAudio, cfg: AudioConfig, state: AudioCaptureSt
         state.frames = []
         state.stop_capture.clear()
         state.stream = stream
+        state.stream.start_stream()
         state.capture_thread = threading.Thread(
             target=capture_loop,
             args=(state, cfg),
             daemon=True,
         )
         state.capture_thread.start()
-        print("PTT started: recording until STOP/release packet.")
+        print("PTT started: recording until PTT_STOP.")
 
 
 def stop_recording(state: AudioCaptureState) -> bytes:
     """End recording if active and return captured bytes."""
+    capture_thread: threading.Thread | None = None
+    stream: pyaudio.Stream | None = None
+
     with state.lock:
         if not state.is_recording:
             return b""
 
         state.is_recording = False
         state.stop_capture.set()
-
-        if state.capture_thread is not None:
-            state.capture_thread.join(timeout=2.0)
-
-        if state.stream is not None:
-            try:
-                state.stream.stop_stream()
-                state.stream.close()
-            except OSError:
-                pass
-
+        capture_thread = state.capture_thread
+        stream = state.stream
         state.stream = None
         state.capture_thread = None
+
+    if capture_thread is not None:
+        capture_thread.join(timeout=2.0)
+
+    if stream is not None:
+        try:
+            stream.stop_stream()
+            stream.close()
+        except OSError:
+            pass
+
+    with state.lock:
         audio_bytes = b"".join(state.frames)
         state.frames = []
         return audio_bytes
@@ -170,21 +180,23 @@ def run_server() -> None:
     try:
         with closing(create_udp_socket(UDP_HOST, UDP_PORT)) as udp_socket:
             print(f"Listening for UDP push-to-talk packets on {UDP_HOST}:{UDP_PORT}")
-            print(f"Start packet: {PTT_START_MESSAGE}")
-            print(f"Stop packet: {PTT_STOP_MESSAGE}")
+            print(f"Start packet: {PTT_START_MESSAGE} (aliases: {sorted(START_MESSAGES)})")
+            print(f"Stop packet: {PTT_STOP_MESSAGE} (aliases: {sorted(STOP_MESSAGES)})")
             while True:
                 data, sender = udp_socket.recvfrom(BUFFER_SIZE)
                 message = data.decode("utf-8", errors="ignore").strip()
                 upper_message = message.upper()
+                if message:
+                    print(f"Received UDP from {sender}: {message}")
 
-                if upper_message == PTT_START_MESSAGE:
+                if upper_message in START_MESSAGES:
                     start_recording(pa, cfg, capture_state)
                     continue
 
-                if upper_message == PTT_STOP_MESSAGE:
+                if upper_message in STOP_MESSAGES:
                     audio_bytes = stop_recording(capture_state)
                     if not audio_bytes:
-                        print("No audio captured.")
+                        print("No audio captured (stop received while idle or silent start).")
                         continue
 
                     try:
