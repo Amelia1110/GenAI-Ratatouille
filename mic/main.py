@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 
@@ -13,13 +14,13 @@ from faster_whisper import WhisperModel
 UDP_HOST = "0.0.0.0"
 UDP_PORT = 5005
 BUFFER_SIZE = 1024
-TRIGGER_MESSAGE = "LISTEN"
+START_MESSAGES = {"LISTEN", "START", "PTT_DOWN", "PRESS"}
+STOP_MESSAGES = {"STOP", "PTT_UP", "RELEASE"}
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
 FRAMES_PER_BUFFER = 1024
 MODEL_NAME = "base.en"
-MAX_RECORD_SECONDS = 8
 
 
 @dataclass
@@ -28,7 +29,21 @@ class AudioConfig:
     channels: int = CHANNELS
     format: int = FORMAT
     frames_per_buffer: int = FRAMES_PER_BUFFER
-    max_record_seconds: int = MAX_RECORD_SECONDS
+
+
+@dataclass
+class AudioCaptureState:
+    is_recording: bool = False
+    frames: list[bytes] = None  # type: ignore[assignment]
+    stream: pyaudio.Stream | None = None
+    capture_thread: threading.Thread | None = None
+    stop_capture: threading.Event = None  # type: ignore[assignment]
+    lock: threading.Lock = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self.frames = []
+        self.stop_capture = threading.Event()
+        self.lock = threading.Lock()
 
 
 def create_udp_socket(host: str, port: int) -> socket.socket:
@@ -58,38 +73,73 @@ def bytes_to_float32_mono(audio_bytes: bytes) -> np.ndarray:
     return (audio_i16.astype(np.float32) / 32768.0).flatten()
 
 
-def capture_once(pa: pyaudio.PyAudio, cfg: AudioConfig) -> bytes:
-    """Capture one fixed-length audio buffer from the default microphone."""
-    total_chunks = int((cfg.sample_rate * cfg.max_record_seconds) / cfg.frames_per_buffer)
-
-    try:
-        stream = pa.open(
-            format=cfg.format,
-            channels=cfg.channels,
-            rate=cfg.sample_rate,
-            input=True,
-            frames_per_buffer=cfg.frames_per_buffer,
-        )
-    except OSError as exc:
-        print(f"Could not open microphone stream: {exc}")
-        return b""
-
-    try:
-        print("Trigger received. Listening...")
-        frames: list[bytes] = []
-        for _ in range(total_chunks):
-            chunk = stream.read(cfg.frames_per_buffer, exception_on_overflow=False)
-            frames.append(chunk)
-        return b"".join(frames)
-    except OSError as exc:
-        print(f"Microphone capture failed: {exc}")
-        return b""
-    finally:
+def capture_loop(state: AudioCaptureState, cfg: AudioConfig) -> None:
+    """Continuously collect mic frames while recording is active."""
+    assert state.stream is not None
+    while not state.stop_capture.is_set():
         try:
-            stream.stop_stream()
-            stream.close()
-        except OSError:
-            pass
+            chunk = state.stream.read(cfg.frames_per_buffer, exception_on_overflow=False)
+            state.frames.append(chunk)
+        except OSError as exc:
+            print(f"Microphone capture failed: {exc}")
+            break
+
+
+def start_recording(pa: pyaudio.PyAudio, cfg: AudioConfig, state: AudioCaptureState) -> None:
+    """Begin recording if not already recording."""
+    with state.lock:
+        if state.is_recording:
+            return
+
+        try:
+            stream = pa.open(
+                format=cfg.format,
+                channels=cfg.channels,
+                rate=cfg.sample_rate,
+                input=True,
+                frames_per_buffer=cfg.frames_per_buffer,
+            )
+        except OSError as exc:
+            print(f"Could not open microphone stream: {exc}")
+            return
+
+        state.is_recording = True
+        state.frames = []
+        state.stop_capture.clear()
+        state.stream = stream
+        state.capture_thread = threading.Thread(
+            target=capture_loop,
+            args=(state, cfg),
+            daemon=True,
+        )
+        state.capture_thread.start()
+        print("PTT started: recording until STOP/release packet.")
+
+
+def stop_recording(state: AudioCaptureState) -> bytes:
+    """End recording if active and return captured bytes."""
+    with state.lock:
+        if not state.is_recording:
+            return b""
+
+        state.is_recording = False
+        state.stop_capture.set()
+
+        if state.capture_thread is not None:
+            state.capture_thread.join(timeout=2.0)
+
+        if state.stream is not None:
+            try:
+                state.stream.stop_stream()
+                state.stream.close()
+            except OSError:
+                pass
+
+        state.stream = None
+        state.capture_thread = None
+        audio_bytes = b"".join(state.frames)
+        state.frames = []
+        return audio_bytes
 
 
 def transcribe_local(model: WhisperModel, audio_bytes: bytes) -> str:
@@ -114,36 +164,68 @@ def run_server() -> None:
     print("Initializing local model...")
     model = load_model_once()
     cfg = AudioConfig()
+    capture_state = AudioCaptureState()
     pa = pyaudio.PyAudio()
 
     try:
         with closing(create_udp_socket(UDP_HOST, UDP_PORT)) as udp_socket:
-            print(f"Listening for UDP trigger '{TRIGGER_MESSAGE}' on {UDP_HOST}:{UDP_PORT}")
+            print(f"Listening for UDP push-to-talk packets on {UDP_HOST}:{UDP_PORT}")
+            print("Start packets: LISTEN/START/PTT_DOWN/PRESS")
+            print("Stop packets: STOP/PTT_UP/RELEASE")
+            print("Compatibility: LISTEN received while recording will stop and transcribe.")
             while True:
                 data, sender = udp_socket.recvfrom(BUFFER_SIZE)
                 message = data.decode("utf-8", errors="ignore").strip()
-                if message != TRIGGER_MESSAGE:
+                upper_message = message.upper()
+
+                if upper_message in START_MESSAGES:
+                    # Backward-compatible toggle: a second LISTEN acts like release.
+                    if upper_message == "LISTEN" and capture_state.is_recording:
+                        audio_bytes = stop_recording(capture_state)
+                        if not audio_bytes:
+                            print("No audio captured.")
+                            continue
+
+                        try:
+                            text = transcribe_local(model, audio_bytes)
+                            if text:
+                                print(f"Transcribed: {text}")
+                            else:
+                                print("No intelligible speech detected.")
+                        except Exception as exc:
+                            print(f"Local transcription failed: {exc}")
+                        continue
+
+                    start_recording(pa, cfg, capture_state)
+                    continue
+
+                if upper_message in STOP_MESSAGES:
+                    audio_bytes = stop_recording(capture_state)
+                    if not audio_bytes:
+                        print("No audio captured.")
+                        continue
+
+                    try:
+                        text = transcribe_local(model, audio_bytes)
+                        if text:
+                            print(f"Transcribed: {text}")
+                        else:
+                            print("No intelligible speech detected.")
+                    except Exception as exc:
+                        print(f"Local transcription failed: {exc}")
+                    continue
+
+                if not message:
+                    continue
+
+                if upper_message:
                     print(f"Ignored message from {sender}: {message}")
-                    continue
-
-                audio_bytes = capture_once(pa, cfg)
-                if not audio_bytes:
-                    print("No audio captured.")
-                    continue
-
-                try:
-                    text = transcribe_local(model, audio_bytes)
-                    if text:
-                        print(f"Transcribed: {text}")
-                    else:
-                        print("No intelligible speech detected.")
-                except Exception as exc:
-                    print(f"Local transcription failed: {exc}")
     except OSError as exc:
         print(f"UDP socket error: {exc}")
     except KeyboardInterrupt:
         print("Server stopped.")
     finally:
+        _ = stop_recording(capture_state)
         pa.terminate()
 
 
