@@ -7,7 +7,7 @@ one terminal. Press Ctrl+C to stop both.
 
 Usage:
   cd laptop
-  .\venv\Scripts\Activate.ps1
+    .\\venv\\Scripts\\Activate.ps1
   python run_ai_remy.py
 
   # ESP32-CAM stream:
@@ -53,6 +53,18 @@ def main() -> None:
         default=1.0,
         help="Seconds between frame file checks",
     )
+    parser.add_argument(
+        "--capture-interval",
+        type=float,
+        default=5.0,
+        help="Seconds between frame captures in cooking-vision",
+    )
+    parser.add_argument(
+        "--scene-threshold",
+        type=float,
+        default=25.0,
+        help="Scene-change threshold for cooking-vision",
+    )
     args = parser.parse_args()
 
     if not app_py.exists():
@@ -62,11 +74,18 @@ def main() -> None:
 
     # Start cooking-vision in subprocess (writes to cooking_vision_dir/frames/latest.jpg)
     stream_arg = args.stream
-    if stream_arg.isdigit():
-        # Pass as int for device index
-        cmd = [sys.executable, str(app_py), "--stream", stream_arg]
-    else:
-        cmd = [sys.executable, str(app_py), "--stream", stream_arg]
+    cmd = [
+        sys.executable,
+        str(app_py),
+        "--stream",
+        stream_arg,
+        "--output",
+        str(Path(args.frame_path).parent),
+        "--interval",
+        str(args.capture_interval),
+        "--threshold",
+        str(args.scene_threshold),
+    ]
 
     print("[ai_remy] Starting camera capture (cooking-vision)...")
     proc = subprocess.Popen(
