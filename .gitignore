@@ -5,7 +5,9 @@
 .vscode/launch.json
 .vscode/ipch
 .venv/
+.venv311/
 .env
+venv/
 credentials.ini
 __pycache__/
 *.pyc
