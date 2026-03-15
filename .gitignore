@@ -4,7 +4,11 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+.venv/
+.venv311/
 .env
 .venv
 .venv311
 credentials.ini
+__pycache__/
+*.pyc
