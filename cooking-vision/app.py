@@ -20,7 +20,7 @@ import numpy as np
 # ──────────────────────────────────────────────
 
 DEFAULT_STREAM_URL  = 0     # 0 = built-in MacBook camera; swap for "http://<IP>:81/stream" when using ESP32-CAM
-FRAME_INTERVAL_S    = 5     # seconds between captured frames
+FRAME_INTERVAL_S    = 15     # seconds between captured frames
 SCENE_CHANGE_THRESH = 25    # mean pixel diff (0-255); lower = more sensitive
 RESIZE_MAX_W        = 640    # resize to this width, height scales to preserve aspect ratio
 OUTPUT_DIR          = "frames"  # folder where frames are saved
