@@ -14,8 +14,8 @@ from faster_whisper import WhisperModel
 UDP_HOST = "0.0.0.0"
 UDP_PORT = 5005
 BUFFER_SIZE = 1024
-START_MESSAGES = {"LISTEN", "START", "PTT_DOWN", "PRESS"}
-STOP_MESSAGES = {"STOP", "PTT_UP", "RELEASE"}
+PTT_START_MESSAGE = "PTT_START"
+PTT_STOP_MESSAGE = "PTT_STOP"
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
@@ -170,36 +170,18 @@ def run_server() -> None:
     try:
         with closing(create_udp_socket(UDP_HOST, UDP_PORT)) as udp_socket:
             print(f"Listening for UDP push-to-talk packets on {UDP_HOST}:{UDP_PORT}")
-            print("Start packets: LISTEN/START/PTT_DOWN/PRESS")
-            print("Stop packets: STOP/PTT_UP/RELEASE")
-            print("Compatibility: LISTEN received while recording will stop and transcribe.")
+            print(f"Start packet: {PTT_START_MESSAGE}")
+            print(f"Stop packet: {PTT_STOP_MESSAGE}")
             while True:
                 data, sender = udp_socket.recvfrom(BUFFER_SIZE)
                 message = data.decode("utf-8", errors="ignore").strip()
                 upper_message = message.upper()
 
-                if upper_message in START_MESSAGES:
-                    # Backward-compatible toggle: a second LISTEN acts like release.
-                    if upper_message == "LISTEN" and capture_state.is_recording:
-                        audio_bytes = stop_recording(capture_state)
-                        if not audio_bytes:
-                            print("No audio captured.")
-                            continue
-
-                        try:
-                            text = transcribe_local(model, audio_bytes)
-                            if text:
-                                print(f"Transcribed: {text}")
-                            else:
-                                print("No intelligible speech detected.")
-                        except Exception as exc:
-                            print(f"Local transcription failed: {exc}")
-                        continue
-
+                if upper_message == PTT_START_MESSAGE:
                     start_recording(pa, cfg, capture_state)
                     continue
 
-                if upper_message in STOP_MESSAGES:
+                if upper_message == PTT_STOP_MESSAGE:
                     audio_bytes = stop_recording(capture_state)
                     if not audio_bytes:
                         print("No audio captured.")
@@ -218,8 +200,7 @@ def run_server() -> None:
                 if not message:
                     continue
 
-                if upper_message:
-                    print(f"Ignored message from {sender}: {message}")
+                print(f"Ignored message from {sender}: {message}")
     except OSError as exc:
         print(f"UDP socket error: {exc}")
     except KeyboardInterrupt:
